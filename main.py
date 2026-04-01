@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import tts
+from routers import tts, chat
 import logging
 
 logging.basicConfig(
@@ -16,3 +16,4 @@ app = FastAPI(
 )
 
 app.include_router(tts.router)
+app.include_router(chat.router)

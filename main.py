@@ -1,5 +1,8 @@
+import warnings
+warnings.filterwarnings("ignore", message="torchcodec is not installed")
+
 from fastapi import FastAPI
-from routers import tts, chat
+from routers import tts, chat, diarization, asr, ocr
 import logging
 
 logging.basicConfig(
@@ -8,7 +11,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 
-# ==================== 创建 FastAPI 应用 ====================
 app = FastAPI(
     title="万象 MyriadAI",
     description="多模态 AI 智能平台 — 听、说、看、写、译",
@@ -17,3 +19,8 @@ app = FastAPI(
 
 app.include_router(tts.router)
 app.include_router(chat.router)
+app.include_router(diarization.router)
+
+app.include_router(asr.router)
+
+app.include_router(ocr.router)

@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-kokoro>=0.9
-soundfile
-numpy
-pydantic
-transformers>=4.51.0
-torch
-accelerate

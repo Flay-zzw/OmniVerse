@@ -13,7 +13,7 @@ from kokoro import KPipeline
 logger = logging.getLogger("tts_service")
 
 VOICE_ID = "zm_yunyang"
-SPEED = 0.8
+SPEED = 0.5
 SAMPLE_RATE = 24000
 SILENCE_DURATION = 0.35
 
@@ -30,6 +30,8 @@ def split_text_by_sentence(text: str) -> list[str]:
         else:
             result.append(s)
     return result
+
+
 
 
 class TTSService:

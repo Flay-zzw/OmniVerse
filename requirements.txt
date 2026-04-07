@@ -1,0 +1,40 @@
+# === NumPy (must be <2 for compatibility) ===
+numpy<2
+
+# === PyTorch (CPU-only) ===
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2+cpu
+torchvision==0.16.2+cpu
+torchaudio==2.1.2+cpu
+
+# === Framework ===
+fastapi
+uvicorn
+pydantic
+python-multipart
+
+# === TTS ===
+kokoro>=0.9,<1.0
+soundfile
+ordered-set
+pypinyin
+cn2an
+misaki[zh]
+
+# === Chat (Qwen) ===
+transformers>=4.44.0,<4.50.0
+accelerate>=0.27.0,<1.0.0
+
+# === Speaker Diarization ===
+pyannote.audio>=3.1,<4.0
+speechbrain==0.5.16
+onnxruntime
+# === Fix requests warnings ===
+urllib3<2
+
+
+# === OCR
+Pillow
+
+
+

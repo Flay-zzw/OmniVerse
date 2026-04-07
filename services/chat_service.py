@@ -7,8 +7,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 logger = logging.getLogger("chat_service")
 
-MODEL_NAME = "Qwen/Qwen3-0.6B"
 
+MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+#MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
 class ChatService:
     def __init__(self):
@@ -16,7 +17,8 @@ class ChatService:
         self.tokenizer = None
 
     def load_model(self):
-        logger.info("正在加载 Qwen3-0.6B 模型...")
+
+        logger.info("正在加载 Qwen/Qwen2.5-1.5B-Instruct 模型...")
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         self.model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
@@ -33,8 +35,7 @@ class ChatService:
 
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-
-        messages = [{"role": "user", "content": message}]
+        messages.append({"role": "user", "content": message})
 
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True,
@@ -46,3 +47,5 @@ class ChatService:
         output_ids = output[0][len(inputs.input_ids[0]):]
 
         return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+
+

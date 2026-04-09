@@ -36,5 +36,8 @@ urllib3<2
 # === OCR
 Pillow
 
+# === Translate (NLLB) ===
+sentencepiece>=0.1.99,<0.3.0
+
 
 

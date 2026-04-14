@@ -4,7 +4,7 @@ Diarization 路由 — 说话人分割接口
 
 import os
 import time
-import shutil
+import asyncio
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from config import OUTPUT_DIR
 from services.diarization_service import DiarizationService
@@ -19,15 +19,17 @@ async def analyze_speakers(file: UploadFile = File(...)):
         raise HTTPException(400, "仅支持 .wav 文件")
 
     save_path = os.path.join(OUTPUT_DIR, f"diarize_{int(time.time())}_{file.filename}")
+    content = await file.read()
     try:
         with open(save_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            f.write(content)
     finally:
         await file.close()
 
     try:
         start_time = time.time()
-        segments = diarization_service.diarize(save_path)
+        # ← 用 asyncio.to_thread 包装阻塞调用
+        segments = await asyncio.to_thread(diarization_service.diarize, save_path)
 
         return {
             "code": 200,

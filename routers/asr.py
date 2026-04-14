@@ -4,9 +4,11 @@ ASR 路由 — 语音转文字
 
 import os
 import uuid
+import asyncio
 import logging
 import json
-from fastapi import APIRouter, UploadFile, File, Form
+import subprocess
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from config import OUTPUT_DIR
 from services.asr_service import ASRService
 from services.diarization_service import DiarizationService
@@ -20,30 +22,79 @@ router = APIRouter(prefix="/asr", tags=["ASR 语音转文字"])
 
 asr_service = ASRService()
 
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".wma", ".aac"}
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".ts"}
+ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
+
+
+async def _save_upload(file: UploadFile, prefix: str) -> tuple[str, str]:
+    """保存上传文件，必要时转为 wav，返回 (原始路径, wav路径)"""
+    ext = os.path.splitext(file.filename)[1].lower() or ".wav"
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"不支持的文件格式：{ext}")
+
+    tmp_name = f"{prefix}_{uuid.uuid4().hex[:8]}{ext}"
+    tmp_path = os.path.join(OUTPUT_DIR, tmp_name)
+
+    content = await file.read()
+    with open(tmp_path, "wb") as f:
+        f.write(content)
+
+    wav_path = await asyncio.to_thread(_ensure_wav, tmp_path)
+    return tmp_path, wav_path
+
+
+def _cleanup(*paths):
+    """清理临时文件"""
+    seen = set()
+    for p in paths:
+        if p and p not in seen and os.path.exists(p):
+            os.remove(p)
+            seen.add(p)
+
+def _ensure_wav(file_path: str) -> str:
+    """如果是视频文件，用 ffmpeg 提取音频并转为 wav；音频文件直接返回原路径"""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in AUDIO_EXTENSIONS:
+        return file_path
+
+    wav_path = file_path.rsplit(".", 1)[0] + ".wav"
+    logger.info("检测到视频文件，正在用 ffmpeg 提取音频：%s → %s", file_path, wav_path)
+
+    cmd = [
+        "ffmpeg", "-i", file_path,
+        "-vn",                # 去掉视频流
+        "-acodec", "pcm_s16le",  # 16-bit PCM
+        "-ar", "16000",       # 16kHz 采样率（Whisper 推荐）
+        "-ac", "1",           # 单声道
+        "-y",                 # 覆盖已有文件
+        wav_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("ffmpeg 失败：%s", result.stderr)
+        raise RuntimeError(f"ffmpeg 音频提取失败：{result.stderr[:200]}")
+
+    logger.info("音频提取完成：%s", wav_path)
+    return wav_path
+
+
 
 @router.post("/transcribe")
 async def transcribe(
         file: UploadFile = File(...),
         language: str = Form("zh"),
 ):
-    """上传音频文件，返回转写文本"""
-    ext = os.path.splitext(file.filename)[1] or ".wav"
-    tmp_name = f"asr_{uuid.uuid4().hex[:8]}{ext}"
-    tmp_path = os.path.join(OUTPUT_DIR, tmp_name)
-
+    tmp_path, wav_path = await _save_upload(file, "asr")
     try:
-        content = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-
-        result = asr_service.transcribe(tmp_path, language=language)
+        result = await asyncio.to_thread(asr_service.transcribe, wav_path, language)
         return {
             "text": result.get("text", ""),
             "chunks": result.get("chunks", []),
         }
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        _cleanup(tmp_path, wav_path)
 
 
 @router.post("/transcribe_with_speakers")
@@ -51,51 +102,44 @@ async def transcribe_with_speakers(
         file: UploadFile = File(...),
         language: str = Form("zh"),
 ):
-    """上传音频 → 说话人分离 + 逐段转写"""
-    ext = os.path.splitext(file.filename)[1] or ".wav"
-    tmp_name = f"asr_diar_{uuid.uuid4().hex[:8]}{ext}"
-    tmp_path = os.path.join(OUTPUT_DIR, tmp_name)
-
+    tmp_path, wav_path = await _save_upload(file, "asr_diar")
     try:
-        content = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-
-        # 1) 说话人分离
-        logger.info("第一步：说话人分离")
-        segments = diarization_service.diarize(tmp_path)
-
-        # 2) 合并相邻同说话人片段（避免过短片段）
-        merged = _merge_segments(segments, gap_threshold=0.5)
-
-        # 3) 逐段转写
-        logger.info("第二步：逐段 ASR，共 %d 段", len(merged))
-        results = []
-        for seg in merged:
-            text = asr_service.transcribe_segment(
-                tmp_path, seg["start"], seg["end"], language=language
-            )
-            results.append({
-                "speaker": seg["speaker"],
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": text,
-            })
-
-        #logger.info("第三步：Qwen 文字校对")
-        #corrected_segments = _correct_text(results)
-
-        logger.info("第四步：Qwen 会议总结")
-        summary = _summarize_meeting(results)
-
-        # return {"segments": results,
-        #         "corrected_segments": corrected_segments,
-        #         "summary": summary}
-        return {"summary": summary}
-
+        result = await asyncio.to_thread(
+            _do_transcribe_with_speakers, wav_path, language
+        )
+        return result
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        _cleanup(tmp_path, wav_path)
+
+
+def _do_transcribe_with_speakers(tmp_path: str, language: str) -> dict:
+    """同步执行：说话人分离 + 逐段转写 + 会议总结（在线程中运行）"""
+    # 1) 说话人分离
+    logger.info("第一步：说话人分离")
+    segments = diarization_service.diarize(tmp_path)
+
+    # 2) 合并相邻同说话人片段
+    merged = _merge_segments(segments, gap_threshold=0.5)
+
+    # 3) 逐段转写
+    logger.info("第二步：逐段 ASR，共 %d 段", len(merged))
+    results = []
+    for seg in merged:
+        text = asr_service.transcribe_segment(
+            tmp_path, seg["start"], seg["end"], language=language
+        )
+        results.append({
+            "speaker": seg["speaker"],
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": text,
+        })
+
+    # 4) 会议总结
+    logger.info("第四步：Qwen 会议总结")
+    summary = _summarize_meeting(results)
+
+    return {"summary": summary}
 
 
 def _merge_segments(segments: list[dict], gap_threshold: float = 0.5) -> list[dict]:
@@ -113,20 +157,6 @@ def _merge_segments(segments: list[dict], gap_threshold: float = 0.5) -> list[di
     return merged
 
 
-CORRECT_SYSTEM_PROMPT = """你是一个专业的中文语音识别校对助手。
-用户会给你一段语音识别(ASR)的结果，其中可能存在错别字、同音替换、漏字、多字等问题。
-
-你的任务：
-1. 逐条校对每段文字，修正明显的ASR识别错误
-2. 补充合理的标点符号
-3. 不要改变原意，不要润色，不要添加原文没有的内容
-4. 保持说话人的口语风格，不要改成书面语
-
-请严格按照以下JSON格式返回，不要输出任何其他内容：
-[
-  {"speaker": "SPEAKER_XX", "text": "校对后的文字"},
-  ...
-]"""
 
 SUMMARY_SYSTEM_PROMPT = """你是一个专业的会议纪要助手。
 用户会给你一段会议的逐字稿（已标注说话人），请你生成一份结构清晰的会议总结。
@@ -166,31 +196,6 @@ SUMMARY_SYSTEM_PROMPT = """你是一个专业的会议纪要助手。
 """
 
 
-def _correct_text(segments: list[dict]) -> list[dict]:
-    """调用 Qwen 对 ASR 结果做文字校对"""
-    # 构造输入，只给 speaker + text
-    input_data = [{"speaker": s["speaker"], "text": s["text"]} for s in segments]
-    message = json.dumps(input_data, ensure_ascii=False)
-
-    raw = chat_service.chat(message, system_prompt=CORRECT_SYSTEM_PROMPT)
-
-    # 解析 Qwen 返回的 JSON
-    try:
-        # 兼容 Qwen 可能返回 ```json ... ``` 的情况
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            cleaned = cleaned.rsplit("```", 1)[0]
-        corrected = json.loads(cleaned)
-
-        # 把校对后的 text 写回原始 segments（保留 start/end）
-        for i, seg in enumerate(segments):
-            if i < len(corrected):
-                seg["text"] = corrected[i].get("text", seg["text"])
-    except (json.JSONDecodeError, KeyError, IndexError) as e:
-        logger.warning("Qwen 校对结果解析失败，使用原始文本：%s", e)
-
-    return segments
 
 
 def _summarize_meeting(segments: list[dict]) -> dict:

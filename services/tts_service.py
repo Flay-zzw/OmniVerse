@@ -13,9 +13,12 @@ from kokoro import KPipeline
 logger = logging.getLogger("tts_service")
 
 VOICE_ID = "zm_yunyang"
-SPEED = 0.5
+SPEED = 0.70
 SAMPLE_RATE = 24000
 SILENCE_DURATION = 0.35
+
+TRIM_MS = 580  # 每段开头裁掉的毫秒数（消除起始伪影）
+TRIM_SAMPLES = int(SAMPLE_RATE * TRIM_MS / 1000)
 
 
 def split_text_by_sentence(text: str) -> list[str]:
@@ -32,8 +35,6 @@ def split_text_by_sentence(text: str) -> list[str]:
     return result
 
 
-
-
 class TTSService:
     def __init__(self):
         self.pipeline = None
@@ -43,9 +44,13 @@ class TTSService:
         self.pipeline = KPipeline(lang_code='z', repo_id='hexgrad/Kokoro-82M')
         logger.info("模型加载完成")
 
+
     def _synthesize_one(self, text: str) -> np.ndarray | None:
         try:
-            audio_parts = [audio for _, _, audio in self.pipeline(text, voice=VOICE_ID, speed=SPEED)]
+
+            audio_parts = []
+            for _, _, audio in self.pipeline(text, voice=VOICE_ID, speed=SPEED):
+                audio_parts.append(audio)
             if not audio_parts:
                 logger.warning("空音频，跳过：%s...", text[:30])
                 return None
@@ -74,6 +79,9 @@ class TTSService:
                 logger.info("  [%d/%d] (%d字) %s", i, len(sentences), len(sentence), sentence[:50])
                 audio = self._synthesize_one(sentence)
                 if audio is not None:
+                    if len(audio) > TRIM_SAMPLES * 2:
+                        logger.info("第 %d 句", i)
+                        audio = audio[TRIM_SAMPLES:]
                     all_audio.append(audio)
                     if i < len(sentences):
                         all_audio.append(silence)

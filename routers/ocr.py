@@ -5,8 +5,9 @@ OCR 路由 — 图片文字提取
 import os
 import uuid
 import time
+import asyncio
 import logging
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from config import OUTPUT_DIR
 from services.ocr_service import OCRService
 
@@ -26,7 +27,6 @@ async def extract_text(
     """上传图片，返回提取的文字内容"""
     ext = os.path.splitext(file.filename)[1].lower() or ".png"
     if ext not in ALLOWED_EXTENSIONS:
-        from fastapi import HTTPException
         raise HTTPException(400, f"不支持的图片格式：{ext}，仅支持 {', '.join(ALLOWED_EXTENSIONS)}")
 
     tmp_name = f"ocr_{uuid.uuid4().hex[:8]}{ext}"
@@ -38,7 +38,8 @@ async def extract_text(
             f.write(content)
 
         start_time = time.time()
-        text = ocr_service.extract_text(tmp_path, prompt=prompt)
+        # ← 用 asyncio.to_thread 包装阻塞调用
+        text = await asyncio.to_thread(ocr_service.extract_text, tmp_path, prompt)
 
         return {
             "code": 200,
@@ -49,7 +50,6 @@ async def extract_text(
             }
         }
     except Exception as e:
-        from fastapi import HTTPException
         raise HTTPException(500, f"文字提取失败：{str(e)}")
     finally:
         if os.path.exists(tmp_path):

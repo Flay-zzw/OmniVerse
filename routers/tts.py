@@ -2,9 +2,12 @@
 TTS 路由 — 文字转语音接口
 """
 
+import os
 import time
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from config import OUTPUT_DIR
 from services.tts_service import TTSService
 
 router = APIRouter(prefix="/tts", tags=["文字转语音"])
@@ -16,7 +19,7 @@ class TTSRequest(BaseModel):
 
 
 @router.post("/generate")
-async def generate_speech(request: TTSRequest):
+def generate_speech(request: TTSRequest):             # ← 改为 def
     if not request.text.strip():
         raise HTTPException(400, "文字内容不能为空")
 
@@ -36,3 +39,21 @@ async def generate_speech(request: TTSRequest):
         }
     except Exception as e:
         raise HTTPException(500, f"语音生成失败：{str(e)}")
+
+
+@router.get("/download/{filename}")
+async def download_audio(filename: str):              # ← 这个保持 async 没问题，无阻塞
+    """下载生成的语音文件"""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "非法文件名")
+
+    file_path = os.path.join(OUTPUT_DIR, filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "文件不存在或已过期")
+
+    return FileResponse(
+        path=file_path,
+        media_type="audio/wav",
+        filename=filename,
+    )

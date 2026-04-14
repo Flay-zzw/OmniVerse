@@ -17,7 +17,7 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/completions")
-async def chat_completions(request: ChatRequest):
+def chat_completions(request: ChatRequest):          # ← 改为 def，FastAPI 自动放线程池
     if not request.message.strip():
         raise HTTPException(400, "消息内容不能为空")
 
